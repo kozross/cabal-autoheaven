@@ -1,0 +1,45 @@
+cabal-version:      3.0
+name:               cabal-autoheaven
+version:            1.0.0
+category:           Distribution
+synopsis:           Make Autotools play nice in Cabal
+description:
+  Helper hook for bundling Autotools-based libraries in Haskell projects.
+
+homepage:           https://github.com/kozross/cabal-autoheaven
+bug-reports:        https://github.com/kozross/cabal-autoheaven/issues
+author:             Koz Ross
+maintainer:         Koz Ross
+license:            Apache-2.0
+build-type:         Simple
+tested-with:        GHC ==8.10.7 || ==9.0.2 || ==9.2.2
+extra-source-files:
+  CHANGELOG.md
+  LICENSE
+  README.md
+
+source-repository head
+  type:     git
+  location: https://github.com/kozross/cabal-autoheaven
+
+common common
+  build-depends:    base >=4.14 && <5
+  ghc-options:
+    -Wall -Wcompat -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wredundant-constraints
+    -Wmissing-export-lists -Wmissing-deriving-strategies
+
+  default-language: Haskell2010
+
+library
+  import:          common
+  exposed-modules: Distribution.Autotools
+  build-depends:
+    , Cabal            >=3.2.0.0  && <3.8.0.0
+    , directory        >=1.3.6.0  && <1.4.0.0
+    , extra            ^>=1.7.0
+    , filepath         ^>=1.4.2.0
+    , process          ^>=1.6.14.0
+    , safe-exceptions  ^>=0.1.7.0
+
+  hs-source-dirs:  src

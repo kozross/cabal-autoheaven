@@ -1,0 +1,4 @@
+packages: ./cabal-autoheaven.cabal
+
+package cabal-autoheaven
+  ghc-options: -Werror
