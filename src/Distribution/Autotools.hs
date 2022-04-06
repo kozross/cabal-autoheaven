@@ -10,7 +10,8 @@ module Distribution.Autotools
   )
 where
 
-import Control.Exception.Safe (IOException, handleIO)
+import Control.Exception.Safe (handleIO, displayException, Exception)
+import Control.Monad.Except (runExceptT, liftIO, ExceptT(..))
 import Control.Monad.Extra (ifM, unlessM)
 import Distribution.Simple (Args)
 import Distribution.Simple.Program.Builtin (arProgram, gccProgram)
@@ -88,29 +89,15 @@ buildAutotoolsLibrary name loc _ _ _ buildInfo = do
         unlessM
           (doesFileExist resultPath)
           (copyFile libLoc resultPath)
-      Nothing -> withCurrentDirectory loc $ do
+      Nothing -> either reportAndVomit (const $ pure ()) =<< withCurrentDirectory loc (runExceptT $ do
         let progDb = withPrograms buildInfo
-        ccMaybe <- needProgram normal gccProgram progDb
-        case ccMaybe of
-          Nothing -> die "Could not find C compiler, giving up."
-          Just (cc, progDb') -> do
-            arMaybe <- needProgram normal arProgram progDb'
-            case arMaybe of
-              Nothing -> die "Could not find ar, giving up."
-              Just (ar, _) -> do
-                shMaybe <- findExecutable "sh"
-                case shMaybe of
-                  Nothing -> die "Could not find sh, giving up."
-                  Just sh -> do
-                    makeMaybe <- findExecutable "make"
-                    case makeMaybe of
-                      Nothing -> die "Could not find make, giving up."
-                      Just make -> do
-                        configureMakeInstall autotoolsInstallDir cc ar sh make
-                        installedLib <- tryFindLib autotoolsInstallDir name
-                        case installedLib of
-                          Nothing -> die "Build succeeded, but no library found, giving up."
-                          Just libLoc -> copyFile libLoc resultPath
+        (cc, progDb') <- needProgram normal gccProgram progDb !? userError "Could not find C compiler, giving up."
+        (ar, _)       <- needProgram normal arProgram progDb' !? userError "Could not find ar, giving up."
+        sh            <- liftIO (findExecutable "sh")         !? userError "Could not find sh, giving up."
+        make          <- liftIO (findExecutable "make")       !? userError "Could not find make, giving up."
+        liftIO $ configureMakeInstall autotoolsInstallDir cc ar sh make
+        libLoc <- liftIO (tryFindLib autotoolsInstallDir name) !? userError "Build succeeded, but no library found, giving up."
+        liftIO $ copyFile libLoc resultPath)
 
 -- Helpers
 
@@ -144,8 +131,8 @@ configureMakeInstall prefix cc ar shPath makePath = do
       UserSpecified fp -> fp
       FoundOnSystem fp -> fp
 
-reportAndVomit :: IOException -> IO ()
-reportAndVomit = die . show
+reportAndVomit :: Exception e => e -> IO ()
+reportAndVomit = die . displayException
 
 -- This is currently a 'shallow' search.
 tryFindLib :: FilePath -> LibraryName -> IO (Maybe FilePath)
@@ -153,3 +140,7 @@ tryFindLib loc = findFile [loc] . toLibName
 
 toLibName :: LibraryName -> FilePath
 toLibName (LibraryName fp) = "lib" <> fp <.> "a"
+
+-- | Convert an applicative 'Maybe' value into the 'ExceptT' monad
+(!?) :: Applicative m => m (Maybe a) -> e -> ExceptT e m a
+(!?) a e = ExceptT (maybe (Left e) Right <$> a)
