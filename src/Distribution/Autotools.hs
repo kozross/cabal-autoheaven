@@ -1,18 +1,21 @@
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Distribution.Autotools
   ( -- * Types
-    LibraryName,
+    Library (..),
 
     -- * Functions
     buildAutotoolsLibrary,
   )
 where
 
-import Control.Exception.Safe (handleIO, displayException, Exception)
-import Control.Monad.Except (runExceptT, liftIO, ExceptT(..))
+import Control.Exception.Safe (Exception, displayException, handleIO)
+import Control.Monad.Except (ExceptT (ExceptT), liftIO, runExceptT)
 import Control.Monad.Extra (ifM, unlessM)
+import Data.Kind (Type)
 import Distribution.Simple (Args)
 import Distribution.Simple.Program.Builtin (arProgram, gccProgram)
 import Distribution.Simple.Program.Db (needProgram)
@@ -43,22 +46,29 @@ import System.Exit (die)
 import System.FilePath ((<.>), (</>))
 import System.Process (callCommand)
 
--- | @since 1.0.0
-newtype LibraryName = LibraryName FilePath
-  deriving
-    ( -- | @since 1.0.0
-      Eq
-    )
-    via FilePath
+-- | The name of a library, along with the /relative/ path of its source tree.
+-- The path should be relative the project's top directory.
+--
+-- = Note
+--
+-- When giving the name of a library, do /not/ use the \'lib\' prefix, as this
+-- will be added for you. So, for example, if the static library that will be
+-- built is named @libcatboy.a@, the name you should use is @"catboy"@, /not/
+-- @"libcatboy"@.
+--
+-- @since 1.0.0
+data Library = Library String FilePath
   deriving stock
     ( -- | @since 1.0.0
-      Show
+      Show,
+      -- | @since 1.0.0
+      Eq
     )
 
 -- | @since 1.0.0
 buildAutotoolsLibrary ::
-  -- | What the library is called.
-  LibraryName ->
+  -- | Library details.
+  Library ->
   -- | Where the source code can be found (relative to project directory).
   FilePath ->
   -- | Required by Cabal.
@@ -71,17 +81,17 @@ buildAutotoolsLibrary ::
   LocalBuildInfo ->
   -- | Works entirely via side effects.
   IO ()
-buildAutotoolsLibrary name loc _ _ _ buildInfo = do
+buildAutotoolsLibrary lib loc _ _ _ buildInfo = do
   destinationPath <- makeAbsolute . buildDir $ buildInfo
   let autotoolsInstallDir = destinationPath </> "autotools-target"
-  let resultPath = destinationPath </> toLibName name
+  let resultPath = destinationPath </> toLibName lib
   handleIO reportAndVomit $ do
     -- Check if we have an install dir already
     libMaybe <-
       ifM
         (doesDirectoryExist autotoolsInstallDir)
         -- If yes, check if we've already got one
-        (tryFindLib autotoolsInstallDir name)
+        (tryFindLib autotoolsInstallDir lib)
         -- If not, create it
         (createDirectory autotoolsInstallDir >> pure Nothing)
     case libMaybe of
@@ -89,15 +99,32 @@ buildAutotoolsLibrary name loc _ _ _ buildInfo = do
         unlessM
           (doesFileExist resultPath)
           (copyFile libLoc resultPath)
-      Nothing -> either reportAndVomit (const $ pure ()) =<< withCurrentDirectory loc (runExceptT $ do
-        let progDb = withPrograms buildInfo
-        (cc, progDb') <- needProgram normal gccProgram progDb !? userError "Could not find C compiler, giving up."
-        (ar, _)       <- needProgram normal arProgram progDb' !? userError "Could not find ar, giving up."
-        sh            <- liftIO (findExecutable "sh")         !? userError "Could not find sh, giving up."
-        make          <- liftIO (findExecutable "make")       !? userError "Could not find make, giving up."
-        liftIO $ configureMakeInstall autotoolsInstallDir cc ar sh make
-        libLoc <- liftIO (tryFindLib autotoolsInstallDir name) !? userError "Build succeeded, but no library found, giving up."
-        liftIO $ copyFile libLoc resultPath)
+      Nothing ->
+        either reportAndVomit (const $ pure ())
+          =<< withCurrentDirectory
+            loc
+            (go autotoolsInstallDir resultPath)
+  where
+    go :: FilePath -> FilePath -> IO (Either IOError ())
+    go autotoolsInstallDir resultPath = runExceptT $ do
+      let progDB = withPrograms buildInfo
+      (cc, progDB') <-
+        needProgram normal gccProgram progDB
+          !? userError "Could not find C compiler, giving up."
+      (ar, _) <-
+        needProgram normal arProgram progDB'
+          !? userError "Could not find ar, giving up."
+      sh <-
+        liftIO (findExecutable "sh")
+          !? userError "Could not find sh, giving up."
+      make <-
+        liftIO (findExecutable "make")
+          !? userError "Could not find make, giving up."
+      liftIO . configureMakeInstall autotoolsInstallDir cc ar sh $ make
+      libLoc <-
+        liftIO (tryFindLib autotoolsInstallDir lib)
+          !? userError "Build succeeded, but no library found, giving up."
+      liftIO . copyFile libLoc $ resultPath
 
 -- Helpers
 
@@ -135,12 +162,17 @@ reportAndVomit :: Exception e => e -> IO ()
 reportAndVomit = die . displayException
 
 -- This is currently a 'shallow' search.
-tryFindLib :: FilePath -> LibraryName -> IO (Maybe FilePath)
+tryFindLib :: FilePath -> Library -> IO (Maybe FilePath)
 tryFindLib loc = findFile [loc] . toLibName
 
-toLibName :: LibraryName -> FilePath
-toLibName (LibraryName fp) = "lib" <> fp <.> "a"
+toLibName :: Library -> FilePath
+toLibName (Library name _) = "lib" <> name <.> "a"
 
--- | Convert an applicative 'Maybe' value into the 'ExceptT' monad
-(!?) :: Applicative m => m (Maybe a) -> e -> ExceptT e m a
+-- Convert an applicative 'Maybe' value into the 'ExceptT' monad
+(!?) ::
+  forall (m :: Type -> Type) (a :: Type) (e :: Type).
+  (Applicative m) =>
+  m (Maybe a) ->
+  e ->
+  ExceptT e m a
 (!?) a e = ExceptT (maybe (Left e) Right <$> a)

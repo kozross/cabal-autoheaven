@@ -17,7 +17,7 @@ GHC, and Cabal, can compile individual C files just fine. However, most
 non-trivial libraries consist of many files, with possibly a lot of flags and
 inter-dependencies. Typically, these are managed via a build system: a common
 choice, [despite its many
-deficiencies](https://web.archive.org/web/20141015085319/https://voices.canonical.com/jussi.pakkanen/2011/09/13/autotools)
+deficiencies](https://web.archive.org/web/20141015085319/https://voices.canonical.com/jussi.pakkanen/2011/09/13/autotools),
 are the Autotools. However, if your library of choice is built with the
 Autotools, you have two unenviable choices:
 
@@ -31,7 +31,22 @@ else. This _does_ require a somewhat tricky `Setup.hs`, however.
 `cabal-autoheaven` essentially deals with the tedious part of such a `Setup.hs`
 for you.
 
+## Why the name?
+
+Due to [well-known and
+stated](http://www.cs.cmu.edu/afs/club.cc.cmu.edu/usr/cmccabe/blog-notes/autotools_considered_harmful2.html)
+problems with the Autotools, it has been nicknamed 'Autohell' by some. This
+package is designed to rescue you from that particular hell in the context of a
+Cabal build: hence the `autoheaven` part. The `cabal-` was added to help people
+find this package, as `autoheaven` isn't very informative by itself.
+
 ## What're the goals of this project?
+
+### Support bundling C libraries using the Autotools
+
+If you need an Autotools-built library, `cabal-autoheaven` should make it easy
+for you to bundle it, and have the build happen transparently as part of your
+project.
 
 ### Ease of use
 
@@ -69,30 +84,43 @@ assumptions from library authors, and the niche benefits of having such a thing,
 
 ### Supporting languages other than C (and C++)
 
-While there is, theoretically, nothing preventing this, it's an extremely
-painful proposition. Each additional language requires (possibly multiple)
-checks for programs being available, and each language's build systems are
-driven in different ways. This more or less means each one requires specialist
-support, which is complicated in itself. Furthermore, to FFI into them from
-Haskell requires them to expose a C API anyway, which isn't always easy or even
-possible. While the Autotools theoretically also support other languages, unlike
-C or C++, there is no guarantee you will have a compiler able to compile them
-available.
+While theoretically, nothing prevents this, it's an extremely painful
+proposition. This is for several reasons:
 
-As a result, we're focusing on C and C++ only.
+* Each additional language requires (possibly multiple) checks for programs
+  being available;
+* Each language's build system is driven differently.
+* There's no uniformity of _where_ build products land, or possibly even a good
+  way of controlling this.
+
+This would require specialist support, probably from someone who knows the
+language in question, which is complicated just in itself. Furthermore, if you
+want to FFI into a library from language X from Haskell, language X has to
+expose a C API anyway, which isn't always easy or even possible.
+
+While the Autotools theoretically support multiple languages (which makes _some_
+of the above problems somewhat easier), unlike with C (and C++ by accident),
+there's no guarantee that you'll have a compiler available which can compile
+them. For C (and C++ by accident), we have bundled support with GHC, so at least
+_that_ part doesn't have to be an issue.
+
+As a result of all the above, we're focusing on C for now, with C++ support
+possible in the future.
 
 ### Pure `make` builds
 
 Some C libraries use `make`, and only `make`, as their 'build system'. In
-theory, there's no reason why we couldn't have such a driver. However, in
-reality, this is either redundant or impossible. 
+theory, there's no reason why we couldn't have such a driver, as we already
+require POSIX `make` to be on the PATH. However, in reality, this is either 
+redundant or impossible. 
 
 All uses of `make` as a build system amount to one of two possibilities:
 
 * 'Chuck it all together and feed it to the compiler', which is what gets done
   in [`libhydrogen`](https://github.com/jedisct1/libhydrogen); or
 * 'Reimplement the Autotools out of spite', which is what gets done in
-  [`chibi-scheme`](https://github.com/ashinn/chibi-scheme)
+  [`chibi-scheme`](https://github.com/ashinn/chibi-scheme), or most of
+  [suckless](https://suckless.org/).
 
 The first of these contains only simple logic, usually just collecting files and
 throwing them at the compiler. In these cases, you can simply bundle the
@@ -106,6 +134,13 @@ can find your C compiler'), which makes any kind of interface we could provide
 in a custom `Setup.hs` either extremely generic (making it hard to use) or
 extremely specialized (making it not very useful).
 
+Furthermore, many builds of the second kind (or even the first kind!) tend to
+make use of non-POSIX `make` features; this is different to the Autotools, which
+_pedantically_ avoids non-POSIX things in the makefiles it generates. This means
+that even _if_ there was some 'uniformity of interface' we could rely on,
+there's no guarantee that we could even drive the makefile without additional
+assurances about what _kind_ of `make` it needed.
+
 As a result, pure `make` builds won't be supported, even if other build systems
 will be. Depending on what you're dealing with, either bundle everything, or
 tell the maintainers to stop pretending.
@@ -114,14 +149,16 @@ tell the maintainers to stop pretending.
 
 Any, or all, of the following could be provided if enough people ask:
 
-* Support for other build systems, such as CMake or Meson.
+* Support for other C build systems, such as CMake or Meson.
 * Building multiple packages, with possible dependencies on each other.
 * (Some) additional build configuration, such as CFLAGS.
-* Ability to retrieve source code from a URL.
+* Ability to retrieve source code from a URL via the Internet.
 * Ability to retrieve `sh` or `make` on Windows via the Internet.
+* Support for C++.
+* Check for `busybox` if a `sh` search fails, and use that if found.
 
-These are significantly larger undertakings, so unless there's a _lot_ of
-demand, they probably won't happen.
+Some of these are significantly larger undertakings, so unless there's a _lot_
+of demand, some of these probably won't happen.
 
 ## How do I use this?
 
@@ -136,15 +173,14 @@ Then, put the following in your `Setup.hs`:
 module Main (main) where
 
 import Distribution.Simple (defaultMainWithHooks, simpleUserHooks, postConf)
-import Distribution.Autotools (mkLibrary, buildAutotoolsLibrary)
+import Distribution.Autotools (Library (Library), buildAutotoolsLibrary)
 import System.FilePath ((</>))
 
 main = do
-  let catboyLibName = mkLibrary "catboy"
-  let sourcePath = "cbits" </> "catboy-unstable" 
+  let catboyLib = Library "catboy" ("cbits" </> "catboy-unstable")
   defaultMainWithHooks $ 
   simpleUserHooks {
-    postConf = buildAutotoolsLibrary catboyLibName sourcePath
+    postConf = buildAutotoolsLibrary catboyLib sourcePath
     }
 ```
 
@@ -158,7 +194,8 @@ Windows, this should already be the case; on Windows, you have several options:
   also get it from [Chocolatey](https://community.chocolatey.org/packages/git).
 * You can also get a POSIX shell via
   [`busybox-w32`](https://frippery.org/busybox), which you can also get from
-  [Chocolatey](https://community.chocolatey.org/packages/busybox).
+  [Chocolatey](https://community.chocolatey.org/packages/busybox). This option
+  is less ideal, as it requires symlinking `busybox sh` to `sh`.
 * You can also get `make` from [MinGW](https://repo.msys2.org/mingw/mingw64).
 
 Out of these, using Chocolatey is probably the least annoying.
